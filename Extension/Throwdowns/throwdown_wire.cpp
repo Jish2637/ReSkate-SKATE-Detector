@@ -55,13 +55,21 @@ struct Reader {
 bool valid_throwdown(const ThrowdownMessage &m) noexcept {
     if (!individual(m.leader) || !m.id) return false;
     switch (m.kind) {
+    case ThrowdownMessage::Kind::detector_offer:
+        if(m.detector_version!=10 || m.series!="ThrowdownSkate")return false;
+        [[fallthrough]];
     case ThrowdownMessage::Kind::offer:
         return valid_series(m.series) && !m.placement.empty() && m.placement.size() <= max_throwdown_params &&
                m.settings.size() <= max_throwdown_params && m.order.size() <= max_throwdown_order &&
                std::all_of(m.order.begin(), m.order.end(), individual);
+    case ThrowdownMessage::Kind::detector_start:
+        if(m.detector_version!=10 || m.settings.empty() || m.settings.size()>max_throwdown_params)return false;
+        [[fallthrough]];
     case ThrowdownMessage::Kind::start:
         return !m.order.empty() && m.order.size() <= max_throwdown_order &&
                std::all_of(m.order.begin(), m.order.end(), individual);
+    case ThrowdownMessage::Kind::detector_join:return m.detector_version==10;
+    case ThrowdownMessage::Kind::detector_attempt:return m.detector_version==10 && m.value>0 && !m.detected.empty() && m.detected.size()<=3500;
     case ThrowdownMessage::Kind::row: return m.board < max_throwdown_boards;
     case ThrowdownMessage::Kind::attempt:
     case ThrowdownMessage::Kind::turn_end: return m.value > 0;
@@ -93,14 +101,18 @@ std::vector<std::uint8_t> encode_throwdown(const ThrowdownMessage &m) {
     w.integer(static_cast<std::uint8_t>(m.kind), 1);
     w.integer(m.leader, 8);
     w.integer(m.id, 4);
+    if(m.kind>=ThrowdownMessage::Kind::detector_offer){w.integer(m.detector_version,2);w.integer(m.rules_mask,1);}
     switch (m.kind) {
+    case ThrowdownMessage::Kind::detector_offer:
     case ThrowdownMessage::Kind::offer:
         w.integer(m.series.size(), 1);
         w.bytes.insert(w.bytes.end(), m.series.begin(), m.series.end());
         w.blob(m.placement, 2);
         w.blob(m.settings, 2);
         [[fallthrough]];
+    case ThrowdownMessage::Kind::detector_start:
     case ThrowdownMessage::Kind::start:
+        if(m.kind==ThrowdownMessage::Kind::detector_start)w.blob(m.settings,2);
         w.integer(m.order.size(), 1);
         for (const auto id : m.order) w.integer(id, 8);
         break;
@@ -111,10 +123,12 @@ std::vector<std::uint8_t> encode_throwdown(const ThrowdownMessage &m) {
         w.integer(m.add ? 1 : 0, 1);
         w.integer(static_cast<std::uint32_t>(m.value), 4);
         break;
+    case ThrowdownMessage::Kind::detector_attempt:
     case ThrowdownMessage::Kind::attempt:
         w.integer(static_cast<std::uint32_t>(m.value), 4);
         w.integer(m.add ? 1 : 0, 1);
         w.bytes.insert(w.bytes.end(), m.trick.begin(), m.trick.end());
+        if(m.kind==ThrowdownMessage::Kind::detector_attempt)w.blob(m.detected,2);
         break;
     case ThrowdownMessage::Kind::challenge_start:
         w.integer(m.series.size(), 1);
@@ -137,6 +151,7 @@ std::vector<std::uint8_t> encode_throwdown(const ThrowdownMessage &m) {
         break;
     default: break;
     }
+    if(w.bytes.size()>4096)throw std::invalid_argument("Throwdown exceeds packet budget");
     return std::move(w.bytes);
 }
 
@@ -145,11 +160,13 @@ std::optional<ThrowdownMessage> decode_throwdown(std::span<const std::uint8_t> b
         Reader r{bytes};
         ThrowdownMessage m;
         const auto kind = r.integer(1);
-        if (kind < 1 || kind > 15) return {};
+        if (kind < 1 || kind > 19) return {};
         m.kind = static_cast<ThrowdownMessage::Kind>(kind);
         m.leader = r.integer(8);
         m.id = static_cast<std::uint32_t>(r.integer(4));
+        if(kind>=16){m.detector_version=static_cast<std::uint16_t>(r.integer(2));m.rules_mask=static_cast<std::uint8_t>(r.integer(1));}
         switch (m.kind) {
+        case ThrowdownMessage::Kind::detector_offer:
         case ThrowdownMessage::Kind::offer: {
             const auto length = r.integer(1);
             if (!r.ok || length > max_throwdown_series || length > bytes.size() - r.at) return {};
@@ -159,7 +176,9 @@ std::optional<ThrowdownMessage> decode_throwdown(std::span<const std::uint8_t> b
             m.settings = r.blob(2, max_throwdown_params);
             [[fallthrough]];
         }
+        case ThrowdownMessage::Kind::detector_start:
         case ThrowdownMessage::Kind::start: {
+            if(m.kind==ThrowdownMessage::Kind::detector_start)m.settings=r.blob(2,max_throwdown_params);
             const auto count = r.integer(1);
             if (!r.ok || count > max_throwdown_order) return {};
             for (std::uint64_t i = 0; i < count; ++i) m.order.push_back(r.integer(8));
@@ -175,12 +194,14 @@ std::optional<ThrowdownMessage> decode_throwdown(std::span<const std::uint8_t> b
             m.value = static_cast<std::int32_t>(r.integer(4));
             break;
         }
+        case ThrowdownMessage::Kind::detector_attempt:
         case ThrowdownMessage::Kind::attempt: {
             m.value = static_cast<std::int32_t>(r.integer(4));
             const auto landed = r.integer(1);
             if (landed > 1) return {};
             m.add = landed != 0;
             for (auto &byte : m.trick) byte = static_cast<std::uint8_t>(r.integer(1));
+            if(m.kind==ThrowdownMessage::Kind::detector_attempt)m.detected=r.blob(2,3500);
             break;
         }
         case ThrowdownMessage::Kind::challenge_start: {

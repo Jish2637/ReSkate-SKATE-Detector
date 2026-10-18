@@ -29,6 +29,7 @@ struct ThrowdownMessage {
         challenge_leave = 14,   // the sender quit its copy
         // Party beacons (analysis/party-re/beacons.md): the sender's beacon in this world, `id` its
         // revision. add = it stands at `location` (placed or moved); else it was removed.
+        detector_offer = 16, detector_join = 17, detector_start = 18, detector_attempt = 19,
         beacon = 15
     };
     Kind kind = Kind::offer;
@@ -50,6 +51,9 @@ struct ThrowdownMessage {
     std::vector<std::uint8_t> criteria, indexes;
     // beacon: the LinearTransform it stands at (right, up, forward, translation; 4 floats each).
     std::array<float, 16> location{};
+    std::uint16_t detector_version{};
+    std::uint8_t rules_mask{};
+    std::vector<std::uint8_t> detected; // versioned normalized detector result, <=3500 bytes
     bool operator==(const ThrowdownMessage &) const = default;
 };
 constexpr std::size_t max_throwdown_series = 48, max_throwdown_params = 1536, max_throwdown_order = 32,

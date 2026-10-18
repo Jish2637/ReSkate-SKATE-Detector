@@ -1,5 +1,6 @@
 #include "native_throwdowns.h"
 #include "grouped_number.h"
+#include "Extension/Skater/skate_detector.h"
 #include "throwdown_lab.h"
 #include "throwdown_relay.h"
 #include "virtual_player_names.h"
@@ -180,7 +181,10 @@ void send_event_hook(Address signature, Address output, const Address* arguments
                 }
                 const auto name = throwdown_event(hash);
                 const auto current_realm = realm();
-                if (current_realm == client_realm) observe_throwdown_send(hash, read<Address>(arguments[0]), arguments[1]);
+                if (current_realm == client_realm) {
+                    observe_throwdown_send(hash, read<Address>(arguments[0]), arguments[1]);
+                    if(skate::active() && !detector_injection() && (hash==0xe85319b1 || hash==0xb2fc396c))return;
+                }
                 // CreateThrowdownQueue: the local player now hosts a throwdown.
                 if (hash == 0x7fac81bb && !state().throwdown_active.exchange(true))
                     logging::log(logging::Level::info, logging::Channel::progression, "Throwdown: local player is hosting one.");
